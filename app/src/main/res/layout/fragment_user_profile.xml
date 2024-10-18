@@ -284,6 +284,8 @@
         android:layout_marginBottom="20sp"
         android:layout_alignParentBottom="true"
         android:background="@drawable/rectangle_light_gray"
+        android:clickable="true"
+        android:focusable="true"
         >
 
         <TextView

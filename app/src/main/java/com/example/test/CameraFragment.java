@@ -1,84 +1,105 @@
 package com.example.test;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.content.res.AssetFileDescriptor;
+import android.graphics.ImageFormat;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
+import androidx.camera.core.ImageProxy;
+import android.media.Image;
 import android.os.Bundle;
 import android.util.Log;
 import android.util.Size;
 import android.view.LayoutInflater;
-import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
-import android.widget.TextView;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
+
+
+import android.graphics.YuvImage;
+import android.graphics.Rect;
+import android.graphics.BitmapFactory;
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.camera.core.AspectRatio;
-import androidx.camera.core.Camera;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
-import androidx.camera.core.ImageCapture;
-import androidx.camera.core.ImageProxy;
+
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
-import androidx.lifecycle.LifecycleOwner;
-import com.google.common.util.concurrent.ListenableFuture;
-import org.tensorflow.lite.support.image.TensorImage;
-import org.tensorflow.lite.support.image.ops.ResizeOp;
-import org.tensorflow.lite.support.image.ImageProcessor;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import com.google.common.util.concurrent.ListenableFuture;
+
+import org.tensorflow.lite.Interpreter;
+
+
 import java.util.concurrent.ExecutionException;
 
 public class CameraFragment extends Fragment {
     private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
-    private ObjectDetectionModel objectDetectionModel;
-    private TextView detectionResultsTextView;
-    private DrawView drawView;
     private PreviewView previewView;
-    private boolean isDetecting = true;
-    private View view;
-    private static final int MODEL_INPUT_SIZE = 448; // Change to your model's input size
+    private static final int REQUEST_CAMERA_PERMISSION = 200;
+    private Interpreter tflite;
 
     @Nullable
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
-        view = inflater.inflate(R.layout.fragment_camera, container, false);
-
-        detectionResultsTextView = view.findViewById(R.id.resultsTextView);
-        Button stopDetectionButton = view.findViewById(R.id.stopButton);
+        View view = inflater.inflate(R.layout.fragment_camera, container, false);
         previewView = view.findViewById(R.id.cameraPreview);
-        drawView = view.findViewById(R.id.drawView);
 
-        stopDetectionButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                stopDetection();
-            }
-        });
+        requestCameraPermissions();
 
-
-        Log.d("!!!", "try");
-
-        // Initialize ObjectDetectionModel (adjust model path as needed)
+        // Load the model when the fragment view is created
         try {
-            objectDetectionModel = new ObjectDetectionModel(
-                    requireContext().getAssets(),
-                    "D:\\Program Codes\\thesisproject\\Test\\Test\\app\\src\\main\\assets\\model.tflite"
-            );
+            MappedByteBuffer modelBuffer = loadModelFile();
+            tflite = new Interpreter(modelBuffer);
         } catch (IOException e) {
             e.printStackTrace();
+            Log.e("CameraFragment", "Error loading model: " + e.getMessage());
         }
+        return view;
+    }
 
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (tflite != null) {
+            tflite.close();
+        }
+    }
 
-        // Initialize camera
+    private void requestCameraPermissions() {
+        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA_PERMISSION);
+        } else {
+            startCamera();  // Start the camera if permission already granted
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        if (requestCode == REQUEST_CAMERA_PERMISSION) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                startCamera(); // Start the camera if permission granted
+            } else {
+                Log.e("CameraFragment", "Camera permission denied");
+                // Optional: Show a dialog to the user explaining why the permission is needed
+            }
+        }
+    }
+
+    private void startCamera() {
         cameraProviderFuture = ProcessCameraProvider.getInstance(requireContext());
         cameraProviderFuture.addListener(() -> {
             try {
@@ -86,132 +107,136 @@ public class CameraFragment extends Fragment {
                 bindPreview(cameraProvider);
             } catch (ExecutionException | InterruptedException e) {
                 e.printStackTrace();
+                Log.e("CameraFragment", "Error initializing camera: " + e.getMessage());
             }
-        }, requireContext().getMainExecutor());
-
-        Log.d("!!!", "Try 2");
-        return view;
+        }, ContextCompat.getMainExecutor(requireContext()));
     }
 
     private void bindPreview(ProcessCameraProvider cameraProvider) {
-        int aspectRatio = aspectRatio(previewView.getWidth(), previewView.getHeight());
-        Preview preview = new Preview.Builder().setTargetAspectRatio(aspectRatio).build();
+        CameraSelector cameraSelector = new CameraSelector.Builder()
+                .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                .build();
 
-        ImageCapture imageCapture = new ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                .setTargetRotation(getActivity().getWindowManager().getDefaultDisplay().getRotation()).build();
-
-        CameraSelector cameraSelector = new CameraSelector.Builder().build();
-
-        cameraProvider.unbindAll();
+        Preview preview = new Preview.Builder()
+                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                .build();
 
         preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
+        cameraProvider.unbindAll();
+        cameraProvider.bindToLifecycle(this, cameraSelector, preview);
+
+        // Set up Image Analysis for model inference
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-                .setTargetResolution(new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE))
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setTargetResolution(new Size(640, 640))
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_BLOCK_PRODUCER)
                 .build();
 
-        imageAnalysis.setAnalyzer(requireContext().getMainExecutor(), new ImageAnalysis.Analyzer() {
-                    @Override
-                    public void analyze(@NonNull ImageProxy imageProxy) {
-                        if (isDetecting) {
-                            detectObjects(imageProxy);
-                        }
-                    }
-                }
-        );
-
-        cameraProvider.bindToLifecycle((LifecycleOwner) this, cameraSelector, preview, imageAnalysis);
+        imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(requireContext()), this::analyzeImage);
+        cameraProvider.bindToLifecycle(this, cameraSelector, imageAnalysis);
     }
 
-    private void detectObjects(ImageProxy imageProxy) {
-        // Convert ImageProxy to TensorImage
-        TensorImage inputImage = convertImageToInputFormat(imageProxy);
+    private void analyzeImage(ImageProxy image) {
+        // Convert ImageProxy to Bitmap
+        Bitmap bitmap = imageToBitmap(image);
 
-        // Run inference
-        float[][][][] input = preprocessInput(inputImage);
-//        List<ObjectDetectionModel.DetectionResult> results = objectDetectionModel.runInference(input);
-        float[] results = objectDetectionModel.runInference(input);
-        Log.d("!!!", Arrays.toString(input));
-        Log.d("!!!", Arrays.toString(results));
+        // Check if bitmap is null before proceeding
+        if (bitmap == null) {
+            Log.e("CameraFragment", "Bitmap conversion failed");
+            image.close(); // Close the image when done
+            return;
+        }
 
-        // Process results and update UI
-//        updateUIWithResults(results);
-        imageProxy.close();
+        // Prepare input and output buffers
+        float[][][] input = preprocessImage(bitmap);
+        float[][] output = new float[1][1]; // Adjust according to your model's output shape
+
+        // Run the model
+        tflite.run(input, output);
+
+        // Do something with the output
+        Log.d("CameraFragment", "Model output: " + output[0][0]);
+
+        image.close(); // Close the image when done
     }
 
-    private TensorImage convertImageToInputFormat(ImageProxy imageProxy) {
-        // Initialize a TensorImage object (part of TensorFlow Lite support library)
-        TensorImage inputImage = new TensorImage();
+    private Bitmap imageToBitmap(ImageProxy image) {
+        Image mediaImage = image.getImage();
+        if (mediaImage == null) {
+            Log.e("CameraFragment", "MediaImage is null");
+            return null;
+        }
 
-        // Get the image from ImageProxy
-        ByteBuffer buffer = imageProxy.getPlanes()[0].getBuffer();
-        Bitmap bitmap = Bitmap.createBitmap(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, Bitmap.Config.ARGB_8888);
-        bitmap.copyPixelsFromBuffer(buffer);
-        inputImage.load(bitmap);
+        // Get the YUV bytes from the ImageProxy
+        Image.Plane[] planes = mediaImage.getPlanes();
+        ByteBuffer yBuffer = planes[0].getBuffer(); // Y
+        ByteBuffer uBuffer = planes[1].getBuffer(); // U
+        ByteBuffer vBuffer = planes[2].getBuffer(); // V
 
-        // Preprocess the image to the correct size
-        inputImage = new ImageProcessor.Builder()
-                .add(new ResizeOp(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, ResizeOp.ResizeMethod.BILINEAR))
-                .build()
-                .process(inputImage);
+        // Get the byte arrays
+        byte[] yBytes = new byte[yBuffer.remaining()];
+        yBuffer.get(yBytes);
+        byte[] uBytes = new byte[uBuffer.remaining()];
+        uBuffer.get(uBytes);
+        byte[] vBytes = new byte[vBuffer.remaining()];
+        vBuffer.get(vBytes);
 
-        return inputImage;
+        // Calculate the image dimensions
+        int width = image.getWidth();
+        int height = image.getHeight();
+
+        // Create a YUV Image
+        YuvImage yuvImage = new YuvImage(yBytes, ImageFormat.NV21, width, height, null);
+
+        // Create a ByteArrayOutputStream to hold the bitmap
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        // Compress the YUV image into JPEG format
+        yuvImage.compressToJpeg(new Rect(0, 0, width, height), 100, outputStream);
+
+        // Get the compressed JPEG data as a byte array
+        byte[] jpegData = outputStream.toByteArray();
+
+        // Create a Bitmap from the JPEG data
+        return BitmapFactory.decodeByteArray(jpegData, 0, jpegData.length);
     }
 
-    private float[][][][] preprocessInput(TensorImage inputImage) {
-        ByteBuffer byteBuffer = inputImage.getBuffer();
-        float[][][][] input = new float[1][MODEL_INPUT_SIZE][MODEL_INPUT_SIZE][3];
-        for (int y = 0; y < MODEL_INPUT_SIZE; y++) {
-            for (int x = 0; x < MODEL_INPUT_SIZE; x++) {
-                input[0][y][x][0] = (byteBuffer.get() & 0xFF) / 255.0f;
-                input[0][y][x][1] = (byteBuffer.get() & 0xFF) / 255.0f;
-                input[0][y][x][2] = (byteBuffer.get() & 0xFF) / 255.0f;
+
+
+    private float[][][] preprocessImage(Bitmap bitmap) {
+        // Resize the Bitmap to the required input size (640x640)
+        Bitmap resizedBitmap = Bitmap.createScaledBitmap(bitmap, 640, 640, true);
+
+        // Create an array to hold the normalized pixel values
+        float[][][] input = new float[3][640][640];
+
+        // Loop through each pixel to fill the input array
+        for (int y = 0; y < 640; y++) {
+            for (int x = 0; x < 640; x++) {
+                int pixel = resizedBitmap.getPixel(x, y);
+                // Extract the RGB values
+                float r = (float) ((pixel >> 16) & 0xff) / 255.0f; // Normalize to [0, 1]
+                float g = (float) ((pixel >> 8) & 0xff) / 255.0f;  // Normalize to [0, 1]
+                float b = (float) (pixel & 0xff) / 255.0f;         // Normalize to [0, 1]
+
+                // Assign to the input array
+                input[0][y][x] = r; // Red channel
+                input[1][y][x] = g; // Green channel
+                input[2][y][x] = b; // Blue channel
             }
         }
 
-        return input;
+        return input; // Return the preprocessed input
     }
 
-    private void updateUIWithResults(List<ObjectDetectionModel.DetectionResult> results) {
-        // Clear previous drawings on DrawView
-        drawView.clear();
 
-        // Draw bounding boxes for each detected object
-        for (ObjectDetectionModel.DetectionResult result : results) {
-            // Calculate bounding box coordinates (left, top, right, bottom)
-            float left = result.left * drawView.getWidth();
-            float top = result.top * drawView.getHeight();
-            float right = result.right * drawView.getWidth();
-            float bottom = result.bottom * drawView.getHeight();
+    private MappedByteBuffer loadModelFile() throws IOException {
+        AssetFileDescriptor fileDescriptor = getContext().getAssets().openFd("model.tflite");
+        FileInputStream inputStream = new FileInputStream(fileDescriptor.getFileDescriptor());
+        FileChannel fileChannel = inputStream.getChannel();
+        long startOffset = fileDescriptor.getStartOffset();
+        long declaredLength = fileDescriptor.getDeclaredLength();
 
-            // Draw bounding box on DrawView
-            drawView.drawBoundingBox(left, top, right, bottom, result.label);
-        }
-    }
-
-    private void stopDetection() {
-        isDetecting = false;
-        // Show final results in TextView
-        detectionResultsTextView.setText("Detection stopped. Results:\n\n" + getCurrentResultsAsString());
-    }
-
-    private String getCurrentResultsAsString() {
-        // Create a string representation of current detection results
-        // Example: Concatenate class names and scores
-        StringBuilder resultString = new StringBuilder();
-        List<ObjectDetectionModel.DetectionResult> results = objectDetectionModel.getResults();
-        for (ObjectDetectionModel.DetectionResult result : results) {
-            resultString.append(result.label).append(": ").append(result.score).append("\n");
-        }
-        return resultString.toString();
-    }
-
-    private int aspectRatio(int width, int height) {
-        double previewRatio = (double) Math.max(width, height) / Math.min(width, height);
-        if (Math.abs(previewRatio - 4.0 / 3.0) <= Math.abs(previewRatio - 16.0 / 9.0)) {
-            return AspectRatio.RATIO_4_3;
-        }
-        return AspectRatio.RATIO_16_9;
+        // Map the model file into memory
+        return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength);
     }
 }

@@ -6,14 +6,18 @@
     tools:context=".CameraFragment">
 
     <!-- Camera Preview -->
-    <TextureView
-        android:id="@+id/viewFinder"
+    <androidx.camera.view.PreviewView
+        android:id="@+id/cameraPreview"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:layout_alignParentTop="true"
         android:layout_alignParentBottom="true"
         android:layout_alignParentStart="true"
-        android:layout_alignParentEnd="true" />
+        android:layout_alignParentEnd="true" >
+
+
+    </androidx.camera.view.PreviewView>
+
 
     <!-- Custom View for Drawing Bounding Boxes -->
     <com.example.test.DrawView
@@ -27,20 +31,6 @@
         android:background="@android:color/transparent"/>
 
     <!-- Detection Results TextView -->
-    <TextView
-        android:id="@+id/resultsTextView"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_alignParentStart="true"
-        android:layout_alignParentTop="true"
-        android:layout_margin="16dp"
-        android:layout_marginStart="16dp"
-        android:layout_marginTop="16dp"
-        android:layout_marginBottom="16dp"
-        android:background="@android:color/white"
-        android:padding="8dp"
-        android:textColor="@android:color/black"
-        android:textSize="16sp" />
 
     <!-- Stop Detection Button -->
     <Button
