@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "972726756476",
+    "project_id": "queens-clinic",
+    "storage_bucket": "queens-clinic.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:972726756476:android:0118fe4080097d6da2d5f9",
+        "android_client_info": {
+          "package_name": "com.example.test"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCKS_pSh1RvmuJU8CXjCCDR5_FiKjV6Nlw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
